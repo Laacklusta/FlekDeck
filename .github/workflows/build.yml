@@ -1,9 +1,11 @@
 name: iOS Build
 
 on:
-
   pull_request:
   workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   build:
@@ -13,38 +15,88 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
-          submodules: true
+          submodules: recursive
+          fetch-depth: 0
 
       - name: Select Xcode version
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: "16.4"
 
+      - name: Show Xcode information
+        run: |
+          xcodebuild -version
+          xcodebuild -showsdks
 
-      - name: Build and Archive
+      - name: List project targets and schemes
+        run: |
+          xcodebuild \
+            -list \
+            -project "LiveContainer.xcodeproj"
+
+      - name: Build unsigned archive
         run: |
           set -o pipefail
+
+          rm -rf build
+          mkdir -p build
+
           xcodebuild clean archive \
             -project "LiveContainer.xcodeproj" \
             -scheme "LiveContainer" \
             -configuration Release \
-            -archivePath $PWD/build/LiveContainer.xcarchive \
+            -archivePath "$PWD/build/LiveContainer.xcarchive" \
             -destination "generic/platform=iOS" \
-            CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO \
-          | xcpretty
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES \
+            | xcpretty
 
-      - name: Create IPA
+      - name: Inspect archive
         run: |
-          mkdir -p build/Payload
-          cp -r build/LiveContainer.xcarchive/Products/Applications/FlekDeck.app build/Payload/
-          cd build
-          zip -r LiveContainer.ipa Payload
-          rm -rf Payload
-          echo "IPA created successfully:"
-          ls -lh LiveContainer.ipa
+          echo "Applications in archive:"
+          find "build/LiveContainer.xcarchive/Products/Applications" \
+            -maxdepth 2 \
+            -type d \
+            -name "*.app" \
+            -print
 
-      - name: Upload IPA artifact
+      - name: Create unsigned IPA
+        run: |
+          set -e
+
+          APP_PATH="build/LiveContainer.xcarchive/Products/Applications/FlekDeck.app"
+
+          if [ ! -d "$APP_PATH" ]; then
+            echo "::error::FlekDeck.app was not found"
+            exit 1
+          fi
+
+          rm -rf build/Payload
+          mkdir -p build/Payload
+
+          cp -R "$APP_PATH" build/Payload/FlekDeck.app
+
+          cd build
+          zip -qry "FlekDeck-unsigned.ipa" Payload
+          rm -rf Payload
+
+          echo "Created IPA:"
+          ls -lh FlekDeck-unsigned.ipa
+
+      - name: Upload unsigned IPA
         uses: actions/upload-artifact@v4
         with:
-          name: LiveContainer.ipa
-          path: build/LiveContainer.ipa
+          name: FlekDeck-unsigned
+          path: build/FlekDeck-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload Xcode archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: FlekDeck-xcarchive
+          path: build/LiveContainer.xcarchive
+          if-no-files-found: error
+          retention-days: 7
